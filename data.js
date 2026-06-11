@@ -61,18 +61,18 @@ const {
 
 // ---------- Helper: computeAggregates ----------
 // ---------- Hierarchy Route (Fixed) ----------
-// const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:3000' ;
-// app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  process.env.FRONTEND_ORIGIN // optional: for production
-].filter(Boolean);
+const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN || 'http://localhost:3000' ;
+app.use(cors({ origin: FRONTEND_ORIGIN, credentials: true }));
+// const allowedOrigins = [
+//   'http://localhost:3000',
+//   'http://127.0.0.1:3000',
+//   process.env.FRONTEND_ORIGIN // optional: for production
+// ].filter(Boolean);
 
-app.use(cors({
-  origin: allowedOrigins,
-  credentials: true
-}));
+// app.use(cors({
+//   origin: allowedOrigins,
+//   credentials: true
+// }));
 app.use(express.json());
 
 // ---------- DB pool (imported from shared module) ----------
@@ -129,7 +129,6 @@ app.post("/hierarchy", async (req, res) => {
 
     if (!rows.length) return res.json({ message: "No data found" });
 
-    // Map by territory
     const byTerritory = {};
     rows.forEach((r) => (byTerritory[r.Territory] = r));
 
@@ -153,7 +152,6 @@ app.post("/hierarchy", async (req, res) => {
         if (childNode) children[c.Territory] = childNode;
       }
 
-      // Node with metrics (existing + new commitment fields)
       let node = {
         empName: emp.Emp_Name,
         territory: emp.Territory,
@@ -165,35 +163,43 @@ app.post("/hierarchy", async (req, res) => {
         Compliance: emp.Compliance ? parseFloat(emp.Compliance) : 0,
         Chemist_Calls: emp.Chemist_Calls ? parseFloat(emp.Chemist_Calls) : 0,
 
-        // PRODUCT QTY FIELDS (existing)
+        // PRODUCT QTY FIELDS
         Deksel_Midmonth_Qty: emp.Deksel_Midmonth_Qty
           ? parseFloat(emp.Deksel_Midmonth_Qty)
           : 0,
-
         Voltaneuron_Midmonth_Qty: emp.Voltaneuron_Midmonth_Qty
           ? parseFloat(emp.Voltaneuron_Midmonth_Qty)
           : 0,
-
         Proaxen_Midmonth_Qty: emp.Proaxen_Midmonth_Qty
           ? parseFloat(emp.Proaxen_Midmonth_Qty)
           : 0,
 
-        // 🔥 NEW COMMITMENT FIELDS
+        // COMMITMENT FIELDS
         Deksel_Commitment: emp.Deksel_Commitment
           ? parseFloat(emp.Deksel_Commitment)
           : 0,
-
         Proaxen_Commitment: emp.Proaxen_Commitment
           ? parseFloat(emp.Proaxen_Commitment)
           : 0,
+        Voltaneuron_Vasoneuron_Commitment: emp.Voltaneuron_Vasoneuron_Commitment
+          ? parseFloat(emp.Voltaneuron_Vasoneuron_Commitment)
+          : 0,
 
-        Voltaneuron_Vasoneuron_Commitment:
-          emp.Voltaneuron_Vasoneuron_Commitment
-            ? parseFloat(emp.Voltaneuron_Vasoneuron_Commitment)
-            : 0,
+        // 🔥 NEW PRESCRIBER FIELDS
+        Active_Prescribers: emp.Active_Prescribers
+          ? parseFloat(emp.Active_Prescribers)
+          : 0,
+        Passive_Prescribers: emp.Passive_Prescribers
+          ? parseFloat(emp.Passive_Prescribers)
+          : 0,
+        Active_Prescribers_Gain: emp.Active_Prescribers_Gain
+          ? parseFloat(emp.Active_Prescribers_Gain)
+          : 0,
+        Active_Prescribers_Lost: emp.Active_Prescribers_Lost
+          ? parseFloat(emp.Active_Prescribers_Lost)
+          : 0,
       };
 
-      // Aggregation logic
       if (Object.keys(children).length > 0) {
         const agg = {
           Coverage: [],
@@ -201,15 +207,21 @@ app.post("/hierarchy", async (req, res) => {
           Compliance: [],
           Chemist_Calls: [],
 
-          // PRODUCT ARRAYS (existing)
+          // PRODUCT QTY ARRAYS
           Deksel_Midmonth_Qty: [],
           Voltaneuron_Midmonth_Qty: [],
           Proaxen_Midmonth_Qty: [],
 
-          // 🔥 NEW COMMITMENT ARRAYS
+          // COMMITMENT ARRAYS
           Deksel_Commitment: [],
           Proaxen_Commitment: [],
           Voltaneuron_Vasoneuron_Commitment: [],
+
+          // 🔥 NEW PRESCRIBER ARRAYS
+          Active_Prescribers: [],
+          Passive_Prescribers: [],
+          Active_Prescribers_Gain: [],
+          Active_Prescribers_Lost: [],
         };
 
         for (const ch of Object.values(children)) {
@@ -218,20 +230,24 @@ app.post("/hierarchy", async (req, res) => {
           agg.Compliance.push(ch.Compliance || 0);
           agg.Chemist_Calls.push(ch.Chemist_Calls || 0);
 
-          // EXISTING PRODUCT QTY PUSH
+          // PRODUCT QTY PUSH
           agg.Deksel_Midmonth_Qty.push(ch.Deksel_Midmonth_Qty || 0);
           agg.Voltaneuron_Midmonth_Qty.push(ch.Voltaneuron_Midmonth_Qty || 0);
           agg.Proaxen_Midmonth_Qty.push(ch.Proaxen_Midmonth_Qty || 0);
 
-          // 🔥 NEW COMMITMENT PUSH
+          // COMMITMENT PUSH
           agg.Deksel_Commitment.push(ch.Deksel_Commitment || 0);
           agg.Proaxen_Commitment.push(ch.Proaxen_Commitment || 0);
-          agg.Voltaneuron_Vasoneuron_Commitment.push(
-            ch.Voltaneuron_Vasoneuron_Commitment || 0
-          );
+          agg.Voltaneuron_Vasoneuron_Commitment.push(ch.Voltaneuron_Vasoneuron_Commitment || 0);
+
+          // 🔥 NEW PRESCRIBER PUSH
+          agg.Active_Prescribers.push(ch.Active_Prescribers || 0);
+          agg.Passive_Prescribers.push(ch.Passive_Prescribers || 0);
+          agg.Active_Prescribers_Gain.push(ch.Active_Prescribers_Gain || 0);
+          agg.Active_Prescribers_Lost.push(ch.Active_Prescribers_Lost || 0);
         }
 
-        // Avg non-sales fields
+        // AVG non-sales fields
         node.Coverage = Math.round(avg(agg.Coverage));
         node.Calls = Math.round(avg(agg.Calls));
         node.Compliance = Math.round(avg(agg.Compliance));
@@ -239,17 +255,19 @@ app.post("/hierarchy", async (req, res) => {
 
         // SUM product qty fields
         node.Deksel_Midmonth_Qty = Math.round(sum(agg.Deksel_Midmonth_Qty));
-        node.Voltaneuron_Midmonth_Qty = Math.round(
-          sum(agg.Voltaneuron_Midmonth_Qty)
-        );
+        node.Voltaneuron_Midmonth_Qty = Math.round(sum(agg.Voltaneuron_Midmonth_Qty));
         node.Proaxen_Midmonth_Qty = Math.round(sum(agg.Proaxen_Midmonth_Qty));
 
-        // 🔥 SUM commitment fields
+        // SUM commitment fields
         node.Deksel_Commitment = Math.round(sum(agg.Deksel_Commitment));
         node.Proaxen_Commitment = Math.round(sum(agg.Proaxen_Commitment));
-        node.Voltaneuron_Vasoneuron_Commitment = Math.round(
-          sum(agg.Voltaneuron_Vasoneuron_Commitment)
-        );
+        node.Voltaneuron_Vasoneuron_Commitment = Math.round(sum(agg.Voltaneuron_Vasoneuron_Commitment));
+
+        // 🔥 SUM prescriber fields
+        node.Active_Prescribers = Math.round(sum(agg.Active_Prescribers));
+        node.Passive_Prescribers = Math.round(sum(agg.Passive_Prescribers));
+        node.Active_Prescribers_Gain = Math.round(sum(agg.Active_Prescribers_Gain));
+        node.Active_Prescribers_Lost = Math.round(sum(agg.Active_Prescribers_Lost));
       }
 
       return node;
@@ -519,9 +537,26 @@ app.post('/getBase', async (req, res) => {
     res.status(500).json({ error: "Server error" });
   }
 });
+app.post('/getYearlySales', async (req, res) => {
+  try {
+    const { territory } = req.body;
+
+    const [rows] = await pool.query(
+      "SELECT SUM(Sales) AS totalsales FROM totalsales WHERE Territory = ?",
+      [territory]
+    );
+
+    res.json({
+      sales: rows[0].totalsales || 0
+    });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
 
 
-// app.post('/CalculateIncentive', async (req, res) => {
 //   try {
 //     const { territory } = req.body;
 
@@ -1927,137 +1962,6 @@ app.post('/getDivisions', async (req, res) => {
 });
 
 
-// app.post("/hierarchy-kpi", async (req, res) => {
-//   try {
-//     const { empterr } = req.body;
-//     if (!empterr) return res.status(400).send("empterr is required");
-
-//     // 1. Build hierarchy using recursive CTE
-//     const [rows] = await pool.query(
-//       `
-//       WITH RECURSIVE downline AS (
-//         SELECT Emp_Code, Emp_Name, Reporting_Manager, Reporting_Manager_Code, Role, Territory, Area_Name
-//         FROM employee_details
-//         WHERE Territory = ?
-//         UNION ALL
-//         SELECT e.Emp_Code, e.Emp_Name, e.Reporting_Manager, e.Reporting_Manager_Code, e.Role, e.Territory, e.Area_Name
-//         FROM employee_details e
-//         INNER JOIN downline d ON e.Area_Name = d.Territory
-//       )
-//       SELECT * FROM downline
-//       `,
-//       [empterr]
-//     );
-
-//     if (!rows.length) return res.json({});
-
-//     // 2. Fetch KPI values for BE's from dashboard1
-//     const territories = rows.map(r => r.Territory);
-//     let kpiByTerritory = {};
-//     if (territories.length > 0) {
-//       const [kpiRows] = await pool.query(
-//         `
-//         SELECT Territory, Calls, Coverage, Compliance, Chemist_Calls
-//         FROM dashboard1
-//         WHERE Territory IN (?)
-//         `,
-//         [territories]
-//       );
-
-//       kpiByTerritory = kpiRows.reduce((acc, r) => {
-//         acc[r.Territory] = {
-//           Calls: r.Calls || 0,
-//           Coverage: r.Coverage || 0,
-//           Compliance: r.Compliance || 0,
-//           Chemist_Calls: r.Chemist_Calls || 0,
-//         };
-//         return acc;
-//       }, {});
-//     }
-
-//     // 3. Build map keyed by territory
-//     const map = {};
-//     rows.forEach(r => {
-//       map[r.Territory] = {
-//         empName: r.Emp_Name,
-//         role: r.Role,
-//         territory: r.Territory,
-//         metrics: (r.Role === "BE" ||r.Role==='TE') ? (kpiByTerritory[r.Territory] || {
-//           Calls: 0,
-//           Coverage: 0,
-//           Compliance: 0,
-//           Chemist_Calls: 0
-//         }) : { Calls: 0, Coverage: 0, Compliance: 0, Chemist_Calls: 0 },
-//         children: {}
-//       };
-//     });
-
-//     // 4. Link children to their parent
-//     let root = {};
-//     rows.forEach(r => {
-//       if (r.Territory === empterr) {
-//         root[r.Territory] = map[r.Territory];
-//       } else if (r.Area_Name) {
-//         const parent = rows.find(p => p.Territory === r.Area_Name);
-//         if (parent && map[parent.Territory]) {
-//           map[parent.Territory].children[r.Territory] = map[r.Territory];
-//         }
-//       }
-//     });
-
-//     // 5. Compute averages bottom-up (direct child averaging)
-//     function computeAverages(node) {
-//       const childKeys = Object.keys(node.children);
-
-//       if (childKeys.length === 0) {
-//         // BE → already has values
-//         return { ...node.metrics, count: 1 };
-//       }
-
-//       let totals = { Calls: 0, Coverage: 0, Compliance: 0, Chemist_Calls: 0 };
-//       let childCount = 0;
-
-//       for (const key of childKeys) {
-//         const child = node.children[key];
-//         const childAgg = computeAverages(child);
-
-//         // Aggregate based on **child metrics**, not leaves
-//         totals.Calls += child.metrics.Calls;
-//         totals.Coverage += child.metrics.Coverage;
-//         totals.Compliance += child.metrics.Compliance;
-//         totals.Chemist_Calls += child.metrics.Chemist_Calls;
-
-//         childCount++;
-//       }
-
-//       // Average across direct children
-//       node.metrics = {
-//         Calls: childCount > 0 ? Math.round(totals.Calls / childCount) : 0,
-//         Coverage: childCount > 0 ? Math.round(totals.Coverage / childCount) : 0,
-//         Compliance: childCount > 0 ? Math.round(totals.Compliance / childCount) : 0,
-//         Chemist_Calls: childCount > 0 ? Math.round(totals.Chemist_Calls / childCount) : 0,
-//       };
-
-//       return { ...totals, count: childCount };
-//     }
-
-//     Object.values(root).forEach(r => computeAverages(r));
-
-//     res.json(root);
-//   } catch (err) {
-//     console.error(err);
-//     res.status(500).send("Error fetching KPI hierarchy");
-//   }
-// });
-
-
-
-
-
-
-
-// ---------- Escalations insert ----------
-
 
 app.post('/putEscalations', async (req, res) => {
   try {
@@ -2366,6 +2270,58 @@ app.get("/PrDoctorReport/:territory", async (req, res) => {
       const cleaned = {};
       for (const key of Object.keys(row)) {
         if (EXCLUDED_COLS.has(key)) cleaned[key] = row[key];
+      }
+      return cleaned;
+    });
+
+    res.json(filtered);
+  } catch (err) {
+    console.error("Error fetching doctor reports:", err);
+    res.status(500).send("Server error");
+  }
+});
+app.get("/Prescriber/:territory", async (req, res) => {
+  try {
+    const territory = req.params.territory;
+    const { period, role } = req.query; // ← read role from query params
+
+    
+
+
+    
+    // Safe to interpolate column name since it comes from our own map, not user input
+    let query = `
+      SELECT *
+      FROM doctor_prescriber_activity
+      WHERE BE_Territory = ?
+    `;
+
+    let params = [territory];
+
+    if (period) {
+      query += ` AND period = ?`;
+      // Use below instead if period is a DATE column:
+      // query += ` AND DATE_FORMAT(period, '%Y-%m') = ?`;
+      params.push(period);
+    }
+
+    query += ` ORDER BY period DESC`;
+
+    const [rows] = await pool.query(query, params);
+
+    const EXCLUDED_COLS = new Set([
+      "Division", "Region", "HQ","id","Period","BE_Territory","Doctor_ID"
+      // "Territory", "status", "Doctor_ID", "Dr_Name", "Patch", 
+      // "Speciality", "RX_Status", "RX_Status_Marked_by_BE",
+      // "BE_Visit_Dates", "BM_Visit_Dates", "BL_Visit_Dates", 
+      // "BH_Visit_Dates", "SBUH_Visit_Dates"
+
+    ]);
+
+    const filtered = rows.map((row) => {
+      const cleaned = {};
+      for (const key of Object.keys(row)) {
+        if (!EXCLUDED_COLS.has(key)) cleaned[key] = row[key];
       }
       return cleaned;
     });
