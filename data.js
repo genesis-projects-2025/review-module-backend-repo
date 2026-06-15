@@ -296,6 +296,295 @@ app.post("/hierarchy", async (req, res) => {
   }
 });
 
+//-----hierarchy Target vs Sales
+
+app.post("/hierarchy1", async (req, res) => {
+  try {
+    let { territory, period, division, product, focus } = req.body || {};
+
+    if (!period) {
+      return res.status(400).json({ error: "Period (YYYY-MM) is required" });
+    }
+
+    const [rows] = await pool.query(
+      "SELECT Territory, Area_Name, Emp_Name, Division, Role, period, metrics FROM hierarchy_metrics_tgt_vs_sales WHERE period = ?",
+      [period]
+    );
+
+    if (!rows.length) {
+      return res.json({ message: "No data found for selected period" });
+    }
+
+    // Parse metrics JSON safely
+    for (const r of rows) {
+      try {
+        r.metrics =
+          typeof r.metrics === "string"
+            ? JSON.parse(r.metrics)
+            : r.metrics || [];
+      } catch {
+        r.metrics = [];
+      }
+
+      // ⭐ Apply focus filter at the metrics level immediately after parsing
+      if (focus && focus !== "") {
+        r.metrics = r.metrics.filter(
+          m => m.Focus && m.Focus.trim().toLowerCase() === focus.trim().toLowerCase()
+        );
+      }
+    }
+
+    // -------------------------------------------------------------
+    // ⭐ HELPER: Aggregate metrics arrays by Product_Name
+    // -------------------------------------------------------------
+    function aggregateMetrics(metricArrays) {
+      const map = {};
+
+      for (const arr of metricArrays) {
+        for (const item of arr) {
+          const key = item.Product_Name;
+          if (!map[key]) {
+            map[key] = {
+              Product_Name: key,
+              Focus: item.Focus,
+              Sales_value: 0,
+              Secondary_units: 0,
+              Target_Qty: 0,
+              Target_Value: 0,
+              _hasTarget: false,
+            };
+          }
+
+          map[key].Sales_value += parseFloat(item.Sales_value) || 0;
+          map[key].Secondary_units += parseInt(item.Secondary_units) || 0;
+          map[key].Target_Qty += parseFloat(item.Target_Qty) || 0;
+          map[key].Target_Value += parseFloat(item.Target_Value) || 0;
+
+          if (item.Target_Value && parseFloat(item.Target_Value) > 0) {
+            map[key]._hasTarget = true;
+          }
+        }
+      }
+
+      return Object.values(map).map(p => {
+        const achieved =
+          p._hasTarget && p.Target_Value > 0
+            ? parseFloat(((p.Sales_value / p.Target_Value) * 100).toFixed(2))
+            : null;
+
+        return {
+          Product_Name: p.Product_Name,
+          Focus: p.Focus,
+          Sales_value: parseFloat(p.Sales_value.toFixed(2)),
+          Secondary_units: p.Secondary_units,
+          Target_Qty: parseFloat(p.Target_Qty.toFixed(2)),
+          Target_Value: parseFloat(p.Target_Value.toFixed(2)),
+          Target_Achieved_Percent: achieved,
+        };
+      });
+    }
+
+    // -------------------------------------------------------------
+    // ⭐ HELPER: Filter metrics by product
+    // -------------------------------------------------------------
+    function filterMetrics(metrics) {
+      if (!product) {
+        return aggregateMetrics([metrics]);
+      }
+      return metrics.filter(m => m.Product_Name === product);
+    }
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 1: FIND FULL SUBTREE
+    // -------------------------------------------------------------
+    function getAllDescendants(startTerritory) {
+      const result = new Set();
+      const queue = [startTerritory];
+
+      while (queue.length > 0) {
+        const terr = queue.shift();
+        result.add(terr);
+        const children = rows.filter(
+          r =>
+            r.Area_Name &&
+            r.Area_Name.trim().toLowerCase() === terr.trim().toLowerCase()
+        );
+        children.forEach(ch => queue.push(ch.Territory));
+      }
+
+      return result;
+    }
+
+    const subtreeTerritories = territory
+      ? getAllDescendants(territory)
+      : new Set(rows.map(r => r.Territory));
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 2: Collect all BE-level divisions for UI
+    // -------------------------------------------------------------
+    let divisionsUnderUser = new Set();
+
+    rows.forEach(r => {
+      if (!subtreeTerritories.has(r.Territory)) return;
+
+      const hasChild = rows.some(
+        x =>
+          x.Area_Name &&
+          x.Area_Name.trim().toLowerCase() === r.Territory.trim().toLowerCase()
+      );
+
+      if (!hasChild && r.Division) {
+        divisionsUnderUser.add(r.Division.trim());
+      }
+    });
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 3: BE-LEVEL FILTER BASED ON DIVISION
+    // -------------------------------------------------------------
+    let filteredRows = rows.filter(r => {
+      if (!subtreeTerritories.has(r.Territory)) return false;
+
+      const hasChild = rows.some(
+        x =>
+          x.Area_Name &&
+          x.Area_Name.trim().toLowerCase() === r.Territory.trim().toLowerCase()
+      );
+
+      if (!hasChild && division) {
+        return r.Division && r.Division.trim() === division.trim();
+      }
+
+      return true;
+    });
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 4: REMOVE EMPTY PARENTS
+    // (also prune BEs that have zero metrics after focus filter)
+    // -------------------------------------------------------------
+    function hasValidSubtree(terr) {
+      const r = filteredRows.find(x => x.Territory === terr);
+      if (!r) return false;
+
+      const isBE = !rows.some(
+        x =>
+          x.Area_Name &&
+          x.Area_Name.trim().toLowerCase() === r.Territory.trim().toLowerCase()
+      );
+
+      if (isBE) {
+        // ⭐ If focus filtered and no metrics remain, prune this BE
+        return r.metrics.length > 0;
+      }
+
+      const children = filteredRows.filter(
+        x =>
+          x.Area_Name &&
+          x.Area_Name.trim().toLowerCase() === terr.trim().toLowerCase()
+      );
+
+      return children.some(c => hasValidSubtree(c.Territory));
+    }
+
+    filteredRows = filteredRows.filter(r => hasValidSubtree(r.Territory));
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 5: BUILD LOOKUP
+    // -------------------------------------------------------------
+    const byTerritory = {};
+    filteredRows.forEach(r => (byTerritory[r.Territory] = r));
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 6: BUILD NODE RECURSIVELY WITH METRICS ROLLUP
+    // -------------------------------------------------------------
+    function buildNode(terr) {
+      const emp = byTerritory[terr];
+      if (!emp) return null;
+
+      const childRows = filteredRows.filter(
+        r =>
+          r.Area_Name &&
+          r.Area_Name.trim().toLowerCase() === terr.trim().toLowerCase()
+      );
+
+      const children = {};
+      for (const c of childRows) {
+        const childNode = buildNode(c.Territory);
+        if (childNode) children[c.Territory] = childNode;
+      }
+
+      let metrics;
+
+      if (Object.keys(children).length === 0) {
+        // BE level — metrics already focus-filtered, apply product filter
+        metrics = filterMetrics(emp.metrics);
+      } else {
+        // Parent level — aggregate children metrics (already focus-filtered)
+        const childMetricArrays = Object.values(children).map(ch => ch.metrics);
+        const aggregated = aggregateMetrics(childMetricArrays);
+
+        metrics = product
+          ? aggregated.filter(m => m.Product_Name === product)
+          : aggregated;
+      }
+
+      return {
+        empName: emp.Emp_Name,
+        territory: emp.Territory,
+        role: emp.Role,
+        period: emp.period,
+        metrics,
+        children,
+      };
+    }
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 7: FIND TOP NODES
+    // -------------------------------------------------------------
+    const childAreas = new Set(
+      filteredRows.map(r => r.Area_Name && r.Area_Name.trim()).filter(Boolean)
+    );
+
+    const topLevels = filteredRows.filter(
+      r => !childAreas.has(r.Territory.trim())
+    );
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 8: FINAL HIERARCHY
+    // -------------------------------------------------------------
+    const hierarchy = {};
+
+    if (territory) {
+      const node = buildNode(territory);
+      if (node) hierarchy[territory] = node;
+    } else {
+      for (const top of topLevels) {
+        const node = buildNode(top.Territory);
+        if (node) hierarchy[top.Territory] = node;
+      }
+    }
+
+    // -------------------------------------------------------------
+    // ⭐ STEP 9: Collect unique product names (after focus filter)
+    // -------------------------------------------------------------
+    const allProducts = new Set();
+    filteredRows.forEach(r => {
+      if (Array.isArray(r.metrics)) {
+        r.metrics.forEach(m => allProducts.add(m.Product_Name));
+      }
+    });
+
+    return res.json({
+      hierarchy,
+      divisions: Array.from(divisionsUnderUser),
+      products: Array.from(allProducts).sort(),
+    });
+
+  } catch (err) {
+    console.error("❌ Error:", err);
+    res.status(500).send("Server error: " + err.message);
+  }
+});
+
 
 
 
