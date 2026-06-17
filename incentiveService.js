@@ -17,234 +17,339 @@ const GROWTH_COLS = [
   { key: 150, multiplier: 2.5 },
 ];
 
-const QUARTER_MONTHS = 3;
-
-// Feb, May, Aug, Nov = quarter-end months for Growth
-const QUARTER_END_MONTHS = ['02', '05', '08', '11'];
+// Aug=08, Nov=11, Feb=02  => incentive calculation months
+const GROWTH_INCENTIVE_MONTHS = ['02', '08', '11'];
 
 function getGrowthRow(baseLakhs) {
   return GROWTH_TABLE.find(r => baseLakhs >= r.min && baseLakhs <= r.max) || null;
 }
 
-function calculateGrowthIncentive(baseNum, totalSales) {
+function calculateGrowthIncentiveByAvg(baseNum, avgSales) {
   const baseLakhs = baseNum / 100000;
   const growthRow = getGrowthRow(baseLakhs);
   if (!growthRow) return null;
 
+  const growthPct = ((avgSales - baseNum) / baseNum) * 100;
+
   let lastReached = -1;
   for (let i = 0; i < GROWTH_COLS.length; i++) {
-    const target = QUARTER_MONTHS * GROWTH_COLS[i].multiplier * baseNum;
-    if (totalSales >= target) lastReached = i;
+    if (growthPct >= GROWTH_COLS[i].key) lastReached = i;
   }
 
   if (lastReached < 0) return null;
   return growthRow.incentives[GROWTH_COLS[lastReached].key];
 }
 
-function getPreviousMonth() {
-  const now = new Date();
-  const d = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
 function getCurrentMonthMM() {
   return String(new Date().getMonth() + 1).padStart(2, '0');
 }
 
-// ── Growth logic for quarter-end months (Feb, May, Aug, Nov) ─────────────────
-async function handleGrowthQuarterEnd(territory, base, period) {
-  // Fetch PCPM
-  const [pcpmRows] = await pool.query(
-    "SELECT updated_pcpm FROM pcpm WHERE Territory=? LIMIT 1",
+// Helper: add current month's sales to yearly_sales
+async function addSalesToYearlySales(territory, sales) {
+  const [rows] = await pool.query(
+    "SELECT total_sales FROM yearly_sales WHERE Territory=? LIMIT 1",
     [territory]
   );
-  if (pcpmRows.length === 0) {
-    console.log(`${territory}: No PCPM found, skipping.`);
-    return;
-  }
-  const pcpm = parseFloat(pcpmRows[0].updated_pcpm);
 
-  // Fetch recent sales (previous month)
-  const prevMonth = getPreviousMonth();
-  const [recentSalesRows] = await pool.query(
-    "SELECT Sales FROM secondary_sales WHERE Territory=? AND Period=? LIMIT 1",
-    [territory, prevMonth]
-  );
-  if (recentSalesRows.length === 0) {
-    console.log(`${territory}: No recent sales for ${prevMonth}, skipping.`);
-    return;
-  }
-  const recentSales = parseFloat(recentSalesRows[0].Sales);
-
-  // Step 1: Set eligibility based on recent sales vs PCPM
-  if (recentSales < pcpm) {
+  if (rows.length > 0) {
+    const newTotal = (parseFloat(rows[0].total_sales) || 0) + sales;
     await pool.query(
-      "UPDATE incentiveeligibility SET eligibility=0 WHERE Territory=?",
-      [territory]
+      "UPDATE yearly_sales SET total_sales=? WHERE Territory=?",
+      [newTotal, territory]
     );
-    console.log(`${territory}: Eligibility = 0 (recentSales ₹${recentSales} < PCPM ₹${pcpm})`);
+    console.log(`${territory}: yearly_sales updated to Rs.${newTotal}`);
   } else {
     await pool.query(
-      "UPDATE incentiveeligibility SET eligibility=1 WHERE Territory=?",
+      "INSERT INTO yearly_sales (Territory, total_sales) VALUES (?, ?)",
+      [territory, sales]
+    );
+    console.log(`${territory}: New yearly_sales row inserted Rs.${sales}`);
+  }
+}
+
+// Growth: remaining months (not Aug/Nov/Feb)
+async function handleGrowthRegularMonth(territory, sales, prevsales, incentivequalification) {
+
+  if (incentivequalification === 0) {
+
+    if (sales >= prevsales) {
+      await addSalesToYearlySales(territory, sales);
+
+    } else {
+      await pool.query(
+        "UPDATE Eligibility SET Incentivequalification=? WHERE Territory=?",
+        [-1, territory]
+      );
+      console.log(`${territory}: sales < prevsales -- Incentivequalification set to -1`);
+      await addSalesToYearlySales(territory, sales);
+    }
+
+  } else {
+    // incentivequalification !== 0 => just accumulate sales
+    await addSalesToYearlySales(territory, sales);
+  }
+}
+
+// Growth: Aug, Nov, Feb
+async function handleGrowthIncentiveMonth(territory, base, period, sales, prevsales, incentivequalification) {
+
+  if (incentivequalification === 0 && sales >= prevsales) {
+
+    const [avgRows] = await pool.query(
+      "SELECT AVG(total_sales) AS avg_total FROM yearly_sales WHERE Territory=?",
       [territory]
     );
-    console.log(`${territory}: Eligibility = 1 (recentSales ₹${recentSales} >= PCPM ₹${pcpm})`);
-  }
+    const avgSales = parseFloat(avgRows[0].avg_total) || 0;
 
-  // Step 2: Sum all sales and upsert into totalsales
-  const [totalSalesRows] = await pool.query(
-    "SELECT SUM(Sales) AS total FROM secondary_sales WHERE Territory=?",
-    [territory]
-  );
-  const totalSales = parseFloat(totalSalesRows[0].total) || 0;
+    const incentive = calculateGrowthIncentiveByAvg(base, avgSales);
 
-  const [existsRows] = await pool.query(
-    "SELECT Territory FROM totalsales WHERE Territory=? LIMIT 1",
-    [territory]
-  );
-  if (existsRows.length > 0) {
-    await pool.query(
-      "UPDATE totalsales SET yearly_sales=? WHERE Territory=?",
-      [totalSales, territory]
-    );
-  } else {
-    await pool.query(
-      "INSERT INTO totalsales (Territory, yearly_sales) VALUES (?, ?)",
-      [territory, totalSales]
-    );
-  }
-  console.log(`${territory}: yearly_sales updated to ₹${totalSales}`);
-
-  // Step 3: Save incentive only if eligible
-  const [eligRows] = await pool.query(
-    "SELECT eligibility FROM incentiveeligibility WHERE Territory=? LIMIT 1",
-    [territory]
-  );
-  const isEligible = eligRows.length > 0 && eligRows[0].eligibility === 1;
-
-  if (isEligible) {
-    const incentive = calculateGrowthIncentive(base, totalSales);
     if (incentive) {
       await pool.query(
         `INSERT INTO incentives (Incentive, Territory, Period) VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE Incentive=VALUES(Incentive)`,
         [incentive, territory, period]
       );
-      console.log(`${territory}: Growth incentive saved ₹${incentive}`);
+      console.log(`${territory}: Growth incentive Rs.${incentive} saved for period ${period}`);
     } else {
-      console.log(`${territory}: Eligible but no milestone reached.`);
+      console.log(`${territory}: Eligible but avg growth did not reach any milestone (min 20% required).`);
     }
+
+    await addSalesToYearlySales(territory, sales);
+
   } else {
-    console.log(`${territory}: Not eligible, incentive skipped.`);
+    await addSalesToYearlySales(territory, sales);
+  }
+
+  // Final eligibility update based on sales vs base
+  if (sales > base) {
+    await pool.query(
+      "UPDATE Eligibility SET Incentivequalification=? WHERE Territory=?",
+      [0, territory]
+    );
+    console.log(`${territory}: sales > base -- Incentivequalification reset to 0`);
+  } else {
+    await pool.query(
+      "UPDATE Eligibility SET Incentivequalification=? WHERE Territory=?",
+      [-1, territory]
+    );
+    console.log(`${territory}: sales <= base -- Incentivequalification set to -1`);
   }
 }
 
-// ── Growth logic for non-quarter months (all other months) ───────────────────
-async function handleGrowthNonQuarter(territory) {
-  // Just keep yearly_sales running total updated
-  const [totalSalesRows] = await pool.query(
-    "SELECT SUM(Sales) AS total FROM secondary_sales WHERE Territory=?",
-    [territory]
-  );
-  const totalSales = parseFloat(totalSalesRows[0].total) || 0;
+// Growth router
+async function handleGrowth(territory, base, period) {
+  const currentMonthMM = getCurrentMonthMM();
 
-  const [existsRows] = await pool.query(
-    "SELECT Territory FROM totalsales WHERE Territory=? LIMIT 1",
+  const [salesRows] = await pool.query(
+    "SELECT Sales, PrevSales FROM CompareSales WHERE Territory=? LIMIT 1",
     [territory]
   );
-  if (existsRows.length > 0) {
-    await pool.query(
-      "UPDATE totalsales SET yearly_sales=? WHERE Territory=?",
-      [totalSales, territory]
-    );
-  } else {
-    await pool.query(
-      "INSERT INTO totalsales (Territory, yearly_sales) VALUES (?, ?)",
-      [territory, totalSales]
-    );
+  if (salesRows.length === 0) {
+    console.log(`${territory}: No sales data found in CompareSales, skipping.`);
+    return;
   }
-  console.log(`${territory}: Non-quarter month — yearly_sales updated to ₹${totalSales}`);
+  const sales     = parseFloat(salesRows[0].Sales);
+  const prevsales = parseFloat(salesRows[0].PrevSales);
 
-  // ── Add future month-specific Growth logic here ───────────────────────────
-  // Example:
-  // if (currentMonthMM === '03') { await handleGrowthMarch(territory); }
-  // if (currentMonthMM === '06') { await handleGrowthJune(territory);  }
+  const [eligRows] = await pool.query(
+    "SELECT Incentivequalification FROM Eligibility WHERE Territory=? LIMIT 1",
+    [territory]
+  );
+  if (eligRows.length === 0) {
+    console.log(`${territory}: No eligibility row found, skipping.`);
+    return;
+  }
+  const incentivequalification = parseInt(eligRows[0].Incentivequalification);
+
+  if (GROWTH_INCENTIVE_MONTHS.includes(currentMonthMM)) {
+    console.log(`${territory}: Growth -- incentive month (${currentMonthMM})`);
+    await handleGrowthIncentiveMonth(territory, base, period, sales, prevsales, incentivequalification);
+  } else {
+    console.log(`${territory}: Growth -- regular month (${currentMonthMM})`);
+    await handleGrowthRegularMonth(territory, sales, prevsales, incentivequalification);
+  }
 }
 
-// ── Main function ─────────────────────────────────────────────────────────────
+
 async function calculateIncentiveForTerritory(territory) {
   try {
-    const currentMonthMM = getCurrentMonthMM();
-    const period         = new Date().toISOString().slice(0, 7); // YYYY-MM
+    const period = new Date().toISOString().slice(0, 7);
 
     const [rankRows] = await pool.query(
       "SELECT Base, Category FROM Rankings WHERE Territory=? LIMIT 1",
       [territory]
     );
+
     if (rankRows.length === 0) return;
 
     const base     = parseFloat(rankRows[0].Base);
     const category = rankRows[0].Category;
 
-    // ── Tier 2 — runs every month ─────────────────────────────────────────────
-    if (category === "Tier_2") {
-      const [salesRows] = await pool.query(
-        "SELECT Sales FROM monthly_sales_summary WHERE Territory=? LIMIT 1",
-        [territory]
-      );
-      if (salesRows.length === 0) return;
+    if (category === "Growth") {
+      await handleGrowth(territory, base, period);
+      return;
+    }
 
-      const salary = parseFloat(salesRows[0].Sales);
-      const growth = salary - base;
+    const [eligibilityRows] = await pool.query(
+      `SELECT Incentivequalification, Incentive, Tier
+       FROM Eligibility
+       WHERE Territory=? LIMIT 1`,
+      [territory]
+    );
 
-      if (growth >= 40000 && salary >= 100000 && salary < 160000) {
-        await pool.query("UPDATE Rankings SET Category=?, Base=? WHERE Territory=?", ["Tier_1", salary, territory]);
-        await pool.query("INSERT INTO incentives (Incentive, Territory, Period) VALUES (?, ?, ?)", [15000, territory, period]);
-        console.log(`${territory}: Tier_2 → Tier_1, incentive ₹15000`);
+    if (eligibilityRows.length === 0) return;
 
-      } else if (growth >= 40000 && salary >= 160000) {
-        await pool.query("UPDATE Rankings SET Category=?, Base=? WHERE Territory=?", ["Growth", salary, territory]);
-        await pool.query("INSERT INTO incentives (Incentive, Territory, Period) VALUES (?, ?, ?)", [15000, territory, period]);
-        console.log(`${territory}: Tier_2 → Growth, incentive ₹15000`);
+    const incentivequalification = parseInt(eligibilityRows[0].Incentivequalification);
+    const incentive              = parseFloat(eligibilityRows[0].Incentive || 0);
+    const tier                   = eligibilityRows[0].Tier;
+
+    const [salesRows] = await pool.query(
+      `SELECT Sales, PrevSales
+       FROM CompareSales
+       WHERE Territory=? LIMIT 1`,
+      [territory]
+    );
+
+    if (salesRows.length === 0) return;
+
+    const sales     = parseFloat(salesRows[0].Sales);
+    const prevsales = parseFloat(salesRows[0].PrevSales);
+    // WHEN INCENTIVEQUALIFICATION = 1
+    if (incentivequalification === 1) {
+      await addSalesToYearlySales(territory, sales)
+
+      if (sales >= prevsales) {
+
+        await pool.query(
+          `INSERT INTO incentives (Incentive, Territory, Period)
+           VALUES (?, ?, ?)`,
+          [incentive, territory, period]
+        );
+
+        await pool.query(
+          `UPDATE Rankings
+           SET Category=?, Base=?
+           WHERE Territory=?`,
+          [tier, prevsales, territory]
+        );
+
+        console.log(
+          `${territory}: Incentive Rs.${incentive} credited. Category updated to ${tier}`
+        );
+
+        if (tier !== "Growth") {
+
+          if ((sales - prevsales >= 50000) && sales >= 160000) {
+
+            await pool.query(
+              `UPDATE Eligibility
+               SET Incentivequalification=?,
+                   Incentive=?,
+                   Tier=?
+               WHERE Territory=?`,
+              [1, 20000, "Growth", territory]
+            );
+
+            console.log(`${territory}: Eligible for Growth incentive Rs.20000`);
+
+          } else {
+
+            await pool.query(
+              `UPDATE Eligibility
+               SET Incentivequalification=?,
+                   Incentive=?
+               WHERE Territory=?`,
+              [0, 0, territory]
+            );
+
+            console.log(`${territory}: Eligibility reset`);
+          }
+
+        } else {
+
+          await pool.query(
+            `UPDATE Eligibility
+             SET Incentivequalification=?,
+                 Incentive=?
+             WHERE Territory=?`,
+            [0, 0, territory]
+          );
+
+          console.log(`${territory}: Growth achieved. Eligibility reset`);
+        }
 
       } else {
-        console.log(`${territory}: Tier_2 — no incentive condition met.`);
+        await pool.query(
+          `UPDATE Eligibility
+           SET Incentivequalification=?,
+               Incentive=?
+           WHERE Territory=?`,
+          [0, 0, territory]
+        );
+        console.log(`${territory}: Sales not greater than PrevSales`);
       }
 
-    // ── Tier 1 — runs every month ─────────────────────────────────────────────
-    } else if (category === "Tier_1") {
-      const [salesRows] = await pool.query(
-        "SELECT Sales FROM monthly_sales_summary WHERE Territory=? LIMIT 1",
-        [territory]
-      );
-      if (salesRows.length === 0) return;
+    }
 
-      const salary = parseFloat(salesRows[0].Sales);
-      const growth = salary - base;
+    // WHEN INCENTIVEQUALIFICATION = 0
+    else if (incentivequalification === 0) {
+      await addSalesToYearlySales(territory, sales)
 
-      if (growth >= 50000 && base >= 160000) {
-        await pool.query("UPDATE Rankings SET Category=?, Base=? WHERE Territory=?", ["Growth", salary, territory]);
-        await pool.query("INSERT INTO incentives (Incentive, Territory, Period) VALUES (?, ?, ?)", [20000, territory, period]);
-        console.log(`${territory}: Tier_1 → Growth, incentive ₹20000`);
+      if (category === "Tier-II") {
 
-      } else if (growth >= 50000 && base < 160000) {
-        await pool.query("UPDATE Rankings SET Category=?, Base=? WHERE Territory=?", ["Tier_1", salary, territory]);
-        await pool.query("INSERT INTO incentives (Incentive, Territory, Period) VALUES (?, ?, ?)", [20000, territory, period]);
-        console.log(`${territory}: Tier_1 stays Tier_1, incentive ₹20000`);
+        const growth = sales - base;
 
-      } else {
-        console.log(`${territory}: Tier_1 — no incentive condition met.`);
+        if (growth >= 40000 && sales > 100000 && sales <= 160000) {
+
+          await pool.query(
+            `UPDATE Eligibility
+             SET Incentivequalification=?,
+                 Incentive=?,
+                 Tier=?
+             WHERE Territory=?`,
+            [1, 15000, "Tier-I", territory]
+          );
+
+          console.log(`${territory}: Eligible for Tier-I incentive Rs.15000`);
+
+        } else if (growth >= 40000 && sales > 160000) {
+
+          await pool.query(
+            `UPDATE Eligibility
+             SET Incentivequalification=?,
+                 Incentive=?,
+                 Tier=?
+             WHERE Territory=?`,
+            [1, 35000, "Growth", territory]
+          );
+
+          console.log(`${territory}: Eligible for Growth incentive Rs.35000`);
+
+        } else {
+          console.log(`${territory}: Tier-II conditions not met`);
+        }
       }
 
-    // ── Growth — runs every month but logic differs by month ──────────────────
-    } else if (category === "Growth") {
-      if (QUARTER_END_MONTHS.includes(currentMonthMM)) {
-        // Feb, May, Aug, Nov — full quarter-end logic
-        await handleGrowthQuarterEnd(territory, base, period);
-      } else {
-        // All other months — non-quarter logic
-        // Add more month-specific handlers here in future
-        await handleGrowthNonQuarter(territory);
+      else if (category === "Tier-I") {
+
+        const growth = sales - base;
+
+        if (growth >= 50000 && sales > 160000) {
+
+          await pool.query(
+            `UPDATE Eligibility
+             SET Incentivequalification=?,
+                 Incentive=?,
+                 Tier=?
+             WHERE Territory=?`,
+            [1, 20000, "Growth", territory]
+          );
+
+          console.log(`${territory}: Eligible for Growth incentive Rs.20000`);
+
+        } else {
+          console.log(`${territory}: Tier-I conditions not met`);
+        }
       }
     }
 
@@ -255,10 +360,10 @@ async function calculateIncentiveForTerritory(territory) {
   }
 }
 
-// ── Run for all territories every month ───────────────────────────────────────
+// Run for all territories every month
 async function runForAllTerritories() {
   try {
-    console.log(`Running incentive calculation — ${new Date().toISOString()}`);
+    console.log(`Running incentive calculation -- ${new Date().toISOString()}`);
     const [rows] = await pool.query("SELECT Territory FROM Rankings");
     for (const row of rows) {
       await calculateIncentiveForTerritory(row.Territory);
