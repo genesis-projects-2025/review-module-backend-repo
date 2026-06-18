@@ -308,7 +308,10 @@ app.post("/hierarchy1", async (req, res) => {
               Secondary_units: 0,
               Target_Qty: 0,
               Target_Value: 0,
+              Sales_YTD: 0,       // ⭐ NEW
+              Target_YTD: 0,      // ⭐ NEW
               _hasTarget: false,
+              _hasTargetYTD: false, // ⭐ NEW
             };
           }
 
@@ -316,9 +319,14 @@ app.post("/hierarchy1", async (req, res) => {
           map[key].Secondary_units += parseInt(item.Secondary_units) || 0;
           map[key].Target_Qty += parseFloat(item.Target_Qty) || 0;
           map[key].Target_Value += parseFloat(item.Target_Value) || 0;
+          map[key].Sales_YTD += parseFloat(item.Sales_YTD) || 0;    // ⭐ NEW
+          map[key].Target_YTD += parseFloat(item.Target_YTD) || 0;  // ⭐ NEW
 
           if (item.Target_Value && parseFloat(item.Target_Value) > 0) {
             map[key]._hasTarget = true;
+          }
+          if (item.Target_YTD && parseFloat(item.Target_YTD) > 0) {  // ⭐ NEW
+            map[key]._hasTargetYTD = true;
           }
         }
       }
@@ -329,6 +337,11 @@ app.post("/hierarchy1", async (req, res) => {
             ? parseFloat(((p.Sales_value / p.Target_Value) * 100).toFixed(2))
             : null;
 
+        const achievedYTD =                                           // ⭐ NEW
+          p._hasTargetYTD && p.Target_YTD > 0
+            ? parseFloat(((p.Sales_YTD / p.Target_YTD) * 100).toFixed(2))
+            : null;
+
         return {
           Product_Name: p.Product_Name,
           Focus: p.Focus,
@@ -337,6 +350,9 @@ app.post("/hierarchy1", async (req, res) => {
           Target_Qty: parseFloat(p.Target_Qty.toFixed(2)),
           Target_Value: parseFloat(p.Target_Value.toFixed(2)),
           Target_Achieved_Percent: achieved,
+          Sales_YTD: parseFloat(p.Sales_YTD.toFixed(2)),              // ⭐ NEW
+          Target_YTD: parseFloat(p.Target_YTD.toFixed(2)),            // ⭐ NEW
+          YTD_Achieved_Percent: achievedYTD,                          // ⭐ NEW
         };
       });
     }
@@ -541,9 +557,6 @@ app.post("/hierarchy1", async (req, res) => {
     res.status(500).send("Server error: " + err.message);
   }
 });
-
-
-
 
 
 
