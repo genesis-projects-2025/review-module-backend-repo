@@ -560,6 +560,9 @@ app.post("/hierarchy1", async (req, res) => {
 
 
 
+
+
+
 // ---------- Employees ----------
 app.get('/employees', async (req, res) => {
   try {
@@ -787,7 +790,7 @@ app.post('/getBase', async (req, res) => {
       return res.status(404).json({ message: "No employee found for given Territory" });
     }
 
-    res.json({ Base: rows[0].Base,Category: rows[0].Category});
+    res.json({ Base: rows[0].Base,Category: rows[0].Category,FixedBase: rows[0].FixedBase });
 
   } catch (err) {
     console.error(err);
