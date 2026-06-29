@@ -1105,15 +1105,27 @@ app.post('/bhDashboardData', async (req, res) => {
       return res.status(400).json({ error: "Territory is required" });
     }
 
-    let query = `SELECT * FROM bgm_bh_dashboard_ftm WHERE BH_Territory = ?`;
+    let tableName = "bgm_bh_dashboard_ftm";
+    let divisionFilter = Division;
+
+    // Handle special divisions
+    if (Division === "Glamus_Gladius") {
+      tableName = "bgm_bh_dashboard_glamus_ftm";
+      divisionFilter = "GLADIUS";
+    } else if (Division === "Glamus_Stimulus") {
+      tableName = "bgm_bh_dashboard_glamus_ftm";
+      divisionFilter = "STIMULUS";
+    }
+    let query = `SELECT * FROM ${tableName} WHERE BH_Territory = ?`;
     let params = [Territory];
 
     // Add division filter if provided
-    if (Division) {
+    if (divisionFilter) {
       query += ` AND division = ?`;
-      params.push(Division);
+      params.push(divisionFilter);
     }
 
+    // Add month filter if provided
     if (Month) {
       query += ` AND Period = ?`;
       params.push(Month);
@@ -1123,8 +1135,8 @@ app.post('/bhDashboardData', async (req, res) => {
 
     if (rows.length === 0) {
       return res.status(404).json({
-        message: Division
-          ? `No FTM record found for Territory: ${Territory}, Division: ${Division}`
+        message: divisionFilter
+          ? `No FTM record found for Territory: ${Territory}, Division: ${divisionFilter}`
           : `No FTM record found for Territory: ${Territory}`
       });
     }
@@ -1269,15 +1281,28 @@ app.post('/bhDashboardytdData', async (req, res) => {
       return res.status(400).json({ error: "Territory is required" });
     }
 
-    let query = `SELECT * FROM bgm_bh_dashboard_ytd WHERE BH_Territory = ?`;
+    let tableName = "bgm_bh_dashboard_ytd";
+    let divisionFilter = Division;
+
+    // Handle special divisions
+    if (Division === "Glamus_Gladius") {
+      tableName = "bgm_bh_dashboard_glamus_ytd";
+      divisionFilter = "GLADIUS";
+    } else if (Division === "Glamus_Stimulus") {
+      tableName = "bgm_bh_dashboard_glamus_ytd";
+      divisionFilter = "STIMULUS";
+    }
+
+    let query = `SELECT * FROM ${tableName} WHERE BH_Territory = ?`;
     let params = [Territory];
 
     // Add division filter if provided
-    if (Division) {
+    if (divisionFilter) {
       query += ` AND division = ?`;
-      params.push(Division);
+      params.push(divisionFilter);
     }
 
+    // Add month filter if provided
     if (Month) {
       query += ` AND Period = ?`;
       params.push(Month);
@@ -1287,8 +1312,8 @@ app.post('/bhDashboardytdData', async (req, res) => {
 
     if (rows.length === 0) {
       return res.status(404).json({
-        message: Division
-          ? `No YTD record found for Territory: ${Territory}, Division: ${Division}`
+        message: divisionFilter
+          ? `No YTD record found for Territory: ${Territory}, Division: ${divisionFilter}`
           : `No YTD record found for Territory: ${Territory}`
       });
     }
@@ -1853,7 +1878,25 @@ app.post('/bhEfficiency', async (req, res) => {
     }
 
     // -----------------------------
-    // Build dynamic queries with Division filter
+    // Determine tables and division filter
+    // -----------------------------
+    let ftmTable = "bgm_bh_dashboard_ftm";
+    let ytdTable = "bgm_bh_dashboard_ytd";
+    let divisionFilter = Division;
+
+    // Handle special divisions
+    if (Division === "Glamus_Gladius") {
+      ftmTable = "bgm_bh_dashboard_glamus_ftm";
+      ytdTable = "bgm_bh_dashboard_glamus_ytd";
+      divisionFilter = "GLADIUS";
+    } else if (Division === "Glamus_Stimulus") {
+      ftmTable = "bgm_bh_dashboard_glamus_ftm";
+      ytdTable = "bgm_bh_dashboard_glamus_ytd";
+      divisionFilter = "STIMULUS";
+    }
+
+    // -----------------------------
+    // Build dynamic queries
     // -----------------------------
     let ftmQuery = `SELECT
       -- Business Performance
@@ -1884,7 +1927,7 @@ app.post('/bhEfficiency', async (req, res) => {
       Priority_Drs_Coverage_Score,
       Priority_RX_Drs_Score,
       BM_Priority_Drs_Coverage_Score
-    FROM bgm_bh_dashboard_ftm
+    FROM ${ftmTable}
     WHERE BH_Territory = ?`;
 
     let ytdQuery = `SELECT
@@ -1908,20 +1951,21 @@ app.post('/bhEfficiency', async (req, res) => {
       Corporate_Drs_Coverage_Score,
       Corporate_Drs_Active_Prescribers_Score,
       BM_Priority_Drs_Coverage_Score
-    FROM bgm_bh_dashboard_ytd
+    FROM ${ytdTable}
     WHERE BH_Territory = ?`;
 
     let ftmParams = [Territory];
     let ytdParams = [Territory];
 
     // Add division filter if provided
-    if (Division) {
+    if (divisionFilter) {
       ftmQuery += ` AND division = ?`;
       ytdQuery += ` AND division = ?`;
-      ftmParams.push(Division);
-      ytdParams.push(Division);
+      ftmParams.push(divisionFilter);
+      ytdParams.push(divisionFilter);
     }
 
+    // Add month filter if provided
     if (Month) {
       ftmQuery += ` AND Period = ?`;
       ytdQuery += ` AND Period = ?`;
@@ -1937,8 +1981,8 @@ app.post('/bhEfficiency', async (req, res) => {
 
     if (!ftmRows.length || !ytdRows.length) {
       return res.status(404).json({
-        message: Division
-          ? `No BH Efficiency record found for Territory: ${Territory}, Division: ${Division}`
+        message: divisionFilter
+          ? `No BH Efficiency record found for Territory: ${Territory}, Division: ${divisionFilter}`
           : `No BH Efficiency record found for Territory: ${Territory}`
       });
     }
@@ -2015,8 +2059,11 @@ app.post('/bhEfficiency', async (req, res) => {
     // =============================
     // EFFICIENCY INDEX
     // =============================
-    const efficiencyMonth = businessMonth + effortMonth + hygieneMonth + commitmentMonth;
-    const efficiencyYTD = businessYTD + effortYTD + hygieneYTD + commitmentYTD;
+    const efficiencyMonth =
+      businessMonth + effortMonth + hygieneMonth + commitmentMonth;
+
+    const efficiencyYTD =
+      businessYTD + effortYTD + hygieneYTD + commitmentYTD;
 
     res.json({
       businessMonth,
