@@ -2590,10 +2590,18 @@ app.get("/PrDoctorReport/:territory", async (req, res) => {
       BH: "BH_Territory",
       SBUH: "SBUH_Territory",
     };
+    const rolePriorityColumnMap = {
+      BE: "BE_Priority_Dr",
+      BM: "BM_Priority_Dr",
+      BL: "BL_Priority_Dr",
+      BH: "BH_Priority_Dr",
+      SBUH: "SBUH_Priority_Dr",
+    };
 
     const territoryColumn = roleColumnMap[role];
+    const priorityColumn = rolePriorityColumnMap[role];
 
-    if (!territoryColumn) {
+    if (!territoryColumn || !priorityColumn) {
       return res.status(400).json({ error: `Invalid or missing role: ${role}` });
     }
 
@@ -2601,7 +2609,7 @@ app.get("/PrDoctorReport/:territory", async (req, res) => {
     let query = `
       SELECT *
       FROM doctor_summary
-      WHERE ${territoryColumn} = ?
+      WHERE ${territoryColumn} = ? and ${priorityColumn} = '1'
     `;
 
     let params = [territory];
