@@ -1378,7 +1378,7 @@ app.post('/dashboardYTD', async (req, res) => {
          Coverage_Score,
          Compliance_Score,
          Activity_Implementation_Score,
-         Secondary_Sales_growth_Score,
+         Target_Achieved_Score,
          MSR_Achievement_Score,
          RX_Growth_Score,
          Brand_Performance_Index_Score
@@ -1408,7 +1408,7 @@ app.post('/dashboardYTD', async (req, res) => {
       (Number(row.Activity_Implementation_Score) || 0)).toFixed(2);
 
     const totalScore2 = (
-      (Number(row.Secondary_Sales_growth_Score) || 0) +
+      (Number(row.Target_Achieved_Score) || 0) +
       (Number(row.MSR_Achievement_Score) || 0) +
       (Number(row.RX_Growth_Score) || 0) +
       (Number(row.Brand_Performance_Index_Score) || 0)).toFixed(2);
@@ -1440,7 +1440,7 @@ app.post('/dashboardFTD', async (req, res) => {
          Coverage_Score,
          Compliance_Score,
          Activity_Implementation_Score,
-         Secondary_Sales_growth_Score,
+         Target_Achieved_Score,
          MSR_Achievement_Score,
          RX_Growth_Score,
          Brand_Performance_Index_Score
@@ -1471,7 +1471,7 @@ app.post('/dashboardFTD', async (req, res) => {
     ).toFixed(2);
 
     const totalScore4 = (
-      (Number(row.Secondary_Sales_growth_Score) || 0) +
+      (Number(row.Target_Achieved_Score) || 0) +
       (Number(row.MSR_Achievement_Score) || 0) +
       (Number(row.RX_Growth_Score) || 0) +
       (Number(row.Brand_Performance_Index_Score) || 0)
